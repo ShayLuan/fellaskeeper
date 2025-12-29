@@ -1,0 +1,5 @@
+discord.py
+python-dotenv
+nltk
+openai
+psycopg2-binary
