@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 import os
 from dotenv import load_dotenv
 import discord
@@ -12,6 +13,30 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
+def get_user_goals_mapping(user_id):
+    """Get user's goals and create a mapping from display number (1, 2, 3...) to database ID.
+    Returns a tuple: (list of goal rows, mapping dict where key=display_num, value=db_id)"""
+    try:
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, description, progress, total FROM goals WHERE user_id = %s ORDER BY id",
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+        connection.close()
+        
+        # Create mapping: display number (1-indexed) -> database ID
+        mapping = {}
+        for idx, row in enumerate(rows, start=1):
+            mapping[idx] = row['id']
+        
+        return rows, mapping
+    except Exception as e:
+        print(f"Error getting user goals mapping: {e}")
+        return [], {}
+
 # intents
 intents = discord.Intents.default() 
 intents.message_content = True  # needed to read messages
@@ -23,6 +48,22 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 # Dictionary to store user goals
 goals = {}
 
+# Emojis for daily check-in ratings
+mood_colors = {
+    1: "🔴",  # terrible
+    2: "🟠",  # bad
+    3: "🟡",  # okay
+    4: "🟢",  # good
+    5: "🔵",  # amazing
+    None: "⚪"  # no rating
+}
+
+# date and time helpers
+today = date.today()
+year = date.today().year
+start_date = date(year, 1, 1)
+end_date = date(year, 12, 31)
+
 # Event: bot is ready
 @bot.event
 async def on_ready():
@@ -33,18 +74,21 @@ async def on_ready():
 
 # simple test command
 @bot.command()
-async def help(ctx):
+async def fellashelp(ctx):
     """Show the help menu"""
     await ctx.send("```" + "Commands:\n" + 
-    "!help - Show the help menu\n" + 
-    "!ping - Check if the bot is responsive\n" +
+    "!fellashelp - Show the help menu\n" + 
+    "!fellasping - Check if the bot is responsive\n" +
     "!goal <goal> <number> - Set a new goal\n" +
     "!mygoals - List all your goals\n" +
-    "!delete <goal_id> - Delete a goal by its ID\n" + 
+    "!delete <goal_number> - Delete a goal by its number\n" + 
+    "!checkin <rating> - Rate your day from 1 (terrible) 🤢 to 5 (amazing) 🤩\n" +
+    "!updatecheckin <rating> - Update today's check-in rating\n" +
+    "!myyear - Display your daily check-in ratings for the year\n" +
     "```")
 
 @bot.command()
-async def ping(ctx):
+async def fellasping(ctx):
     """Pong! Check if the bot is responsive."""
     # 'ctx' is the "context" - contains message, author, channel, guild info
     await ctx.send(f'🏓 Pong! Latency: {round(bot.latency * 1000)}ms') # sends a message to the channel
@@ -80,23 +124,15 @@ async def mygoals(ctx):
     """List all goals by user_id from the database."""
     user_id = ctx.author.id
     try:
-        connection = get_db_connection()
-        with connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT description, progress, total FROM goals WHERE user_id = %s",
-                    (user_id,)
-                )
-                rows = cursor.fetchall()
-        connection.close()
+        rows, mapping = get_user_goals_mapping(user_id)
 
         if not rows:
             await ctx.send("You haven't set any goals yet.\n User !goal <goal> <number> to set one! 🚀")
             return
         
         msg = "**YOUR GOALS:**\n"
-        for row in rows:
-            msg += f"- {row['id']} - {row['description'].strip('\"')}: {row['progress']}/{row['total']}\n"
+        for display_num, row in enumerate(rows, start=1):
+            msg += f"- {display_num} - {row['description'].strip('\"')}: {row['progress']}/{row['total']}\n"
         await ctx.send(msg)
     except Exception as e:
         await ctx.send("❌ Failed to retrieve goals. Please contact the bot admin.")
@@ -104,16 +140,26 @@ async def mygoals(ctx):
 
 @bot.command()
 async def delete(ctx, *, id: int):
-    """Delete a goal by its ID. Usage: !delete <goal_id>
+    """Delete a goal by its display number. Usage: !delete <goal_number>
     Make sure user can only delete their own goals."""
     user_id = ctx.author.id
     try:
+        # Get the mapping to translate display number to database ID
+        rows, mapping = get_user_goals_mapping(user_id)
+        
+        if id not in mapping:
+            await ctx.send(f"❌ Goal number {id} not found. Use !mygoals to see your goals.")
+            return
+        
+        # Get the actual database ID from the mapping
+        db_id = mapping[id]
+        
         connection = get_db_connection()
         with connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM goals WHERE id = %s AND user_id = %s RETURNING id;",
-                    (id, user_id)
+                    (db_id, user_id)
                 )
                 deleted = cursor.fetchone()
         connection.close()
@@ -126,4 +172,127 @@ async def delete(ctx, *, id: int):
         await ctx.send("❌ Failed to delete goal. Please contact the bot admin.")
         print(f"Error deleting goal: {e}")
 
+@bot.command()
+async def checkin(ctx, *, rating: int):
+    """User rates their day on a scale from 1 to 5. Usage: !checkin <rating>
+    1 = terrible, 5 = amazing"""
+    if rating < 1 or rating > 5:
+        await ctx.send("❌This is an invalid rating. Between 1 and 5, fam.")
+        return
+    
+    user_id = ctx.author.id
+    try:
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                # Check if user already checked in today
+                cursor.execute(
+                    "SELECT user_id FROM checkins WHERE user_id = %s AND date = %s",
+                    (user_id, today)
+                )
+                existing = cursor.fetchone()
+
+                if existing:
+                    await ctx.send("⏳ You've already checked in today! If you need to update your rating, use **!updatecheckin <rating>**.")
+                    return
+
+                cursor.execute(
+                    "INSERT INTO checkins (user_id, date, rating) VALUES (%s, %s, %s)",
+                    (user_id, today, rating)
+                )
+        connection.close()
+        await ctx.send(f"✅ Check-in recorded! You rated your day as {mood_colors[rating]}")
+    except Exception as e:
+        await ctx.send("❌ Failed to record check-in. Please contact the bot admin.")
+        print(f"Error recording check-in: {e}")
+
+@bot.command()
+async def updatecheckin(ctx, *, rating: int):
+    """Update today's check-in rating. Usage: !updatecheckin <rating>
+    1 = terrible, 5 = amazing"""
+    if rating < 1 or rating > 5:
+        await ctx.send("❌This is an invalid rating. Between 1 and 5, fam.")
+        return
+    
+    today = date.today()
+    user_id = ctx.author.id
+    try:
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                # Check if user has checked in today
+                cursor.execute(
+                    "SELECT user_id FROM checkins WHERE user_id = %s AND date = %s",
+                    (user_id, today)
+                )
+                existing = cursor.fetchone()
+
+                if not existing:
+                    await ctx.send("❌ You haven't checked in today yet! Use **!checkin <rating>** to record your rating.")
+                    return
+
+                cursor.execute(
+                    "UPDATE checkins SET rating = %s WHERE user_id = %s AND date = %s",
+                    (rating, user_id, today)
+                )
+        connection.close()
+        await ctx.send(f"✅ Check-in updated! You rated your day as {mood_colors[rating]}")
+    except Exception as e:
+        await ctx.send("❌ Failed to update check-in. Please contact the bot admin.")
+        print(f"Error updating check-in: {e}")
+
+# Display days ratings
+@bot.command()
+async def myyear(ctx):
+    """Display user's daily check-in ratings for the year."""
+    user_id = ctx.author.id
+    try:
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT date, rating FROM checkins WHERE user_id = %s ORDER BY date",
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+        connection.close()
+
+        if not rows:
+            await ctx.send("You haven't made any check-ins yet. Use **!checkin <rating>** to start tracking your days! ☑️")
+            return
+
+        # Map checkins dates to ratings
+        day_to_rating = {}
+        for row in rows:
+            checkin_date = row['date']
+            rating = row['rating']
+            day_to_rating[checkin_date] = rating
+        
+        msg = " **Your year so far:** \n"
+        current_date = start_date
+
+        for week in range (27): # 26 rows for weeks + 1 day for 365 days total
+            row = ""
+            # first 7 days
+            for i in range(7):
+                if current_date > end_date:
+                    break
+                rating = day_to_rating.get(current_date, None)
+                row += mood_colors[rating]
+                current_date += timedelta(days=1)
+            row += "\t"
+            # next 7 days
+            for i in range(7):
+                if current_date > end_date:
+                    break
+                rating = day_to_rating.get(current_date, None)
+                row += mood_colors[rating]
+                current_date += timedelta(days=1)               
+            msg += row + "\n"
+            if current_date > end_date:
+                break    
+        await ctx.send(msg)
+    except Exception as e:
+        await ctx.send("❌ Failed to retrieve check-ins. Please contact the bot admin.")
+        print(f"Error retrieving check-ins: {e}")
 bot.run(DISCORD_TOKEN)
