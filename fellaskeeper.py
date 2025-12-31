@@ -81,7 +81,9 @@ async def fellashelp(ctx):
     "!fellasping - Check if the bot is responsive\n" +
     "!goal <goal> <number> - Set a new goal\n" +
     "!mygoals - List all your goals\n" +
-    "!delete <goal_number> - Delete a goal by its number\n" + 
+    "\n!updategoal <goal_number> <progress_increment> - Update progress on a goal\n" +
+    "\tMake sure to check out your goal number with !mygoals first before updating\n" +
+    "\n!delete <goal_number> - Delete a goal by its number\n" + 
     "!checkin <rating> - Rate your day from 1 (terrible) 🤢 to 5 (amazing) 🤩\n" +
     "!updatecheckin <rating> - Update today's check-in rating\n" +
     "!myyear - Display your daily check-in ratings for the year\n" +
@@ -171,6 +173,60 @@ async def delete(ctx, *, id: int):
     except Exception as e:
         await ctx.send("❌ Failed to delete goal. Please contact the bot admin.")
         print(f"Error deleting goal: {e}")
+
+@bot.command()
+async def updategoal(ctx, *, id_and_progress):
+    """Update progress on a goal. 
+    Make sure to check your goal number with **!mygoals** first.
+    Usage: !updategoal <goal_number> <progress_increment>"""
+    try:
+        id_str, progress_str = id_and_progress.rsplit(" ", 1)
+        id = int(id_str)
+        progress_increment = int(progress_str)
+    except Exception:
+        await ctx.send("❌ Invalid format. Please use **!updategoal <goal_number> <progress_increment>**")
+        return
+    
+    user_id = ctx.author.id
+    try:
+        # Get the mapping to translate display number to database ID
+        rows, mapping = get_user_goals_mapping(user_id)
+        
+        if id not in mapping:
+            await ctx.send(f"❌ Goal number {id} not found. Use **!mygoals** to see your goals.")
+            return
+        
+        # Get the actual database ID from the mapping
+        db_id = mapping[id]
+        
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                # Update the goal's progress
+                cursor.execute(
+                    "UPDATE goals SET progress = LEAST(progress + %s, total) WHERE id = %s AND user_id = %s RETURNING progress, total;",
+                    (progress_increment, db_id, user_id)
+                )
+                updated = cursor.fetchone()
+        connection.close()
+
+        # Progress bar
+        progress = updated['progress']
+        total = updated['total']
+        bar_length = 20
+        filled_length = int(bar_length * progress // total) if total > 0 else 0
+        bar = "█" * filled_length + "░" * (bar_length - filled_length)
+
+        # Percentage completion
+        percentage = (progress / total) * 100 if total > 0 else 0
+
+        if updated:
+            await ctx.send(f"Goal number {id} updated successfully ✅ Current progress: {updated['progress']}/{updated['total']}\n{bar} {percentage:.1f}% done")
+        else:
+            await ctx.send("❌ Goal not found or it's not your goal.")
+    except Exception as e:
+        await ctx.send("❌ Failed to update goal. Please contact the bot admin.")
+        print(f"Error updating goal: {e}")
 
 @bot.command()
 async def checkin(ctx, *, rating: int):
