@@ -8,10 +8,10 @@ from psycopg2.extras import RealDictCursor
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+DB_URL = os.getenv("DB_URL")
 
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
 def get_user_goals_mapping(user_id):
     """Get user's goals and create a mapping from display number (1, 2, 3...) to database ID.
