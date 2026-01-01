@@ -86,6 +86,7 @@ async def fellashelp(ctx):
     "\n!delete <goal_number> - Delete a goal by its number\n" + 
     "!checkin <rating> - Rate your day from 1 (terrible) 🤢 to 5 (amazing) 🤩\n" +
     "!updatecheckin <rating> - Update today's check-in rating\n" +
+    "!streak - Display your current and longest check-in streak\n" +
     "!myyear - Display your daily check-in ratings for the year\n" +
     "```")
 
@@ -228,6 +229,57 @@ async def updategoal(ctx, *, id_and_progress):
         await ctx.send("❌ Failed to update goal. Please contact the bot admin.")
         print(f"Error updating goal: {e}")
 
+async def get_streak(user_id):
+    """Calculate current and longest check-in streak for a user."""
+    today = date.today()
+    try:
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT DISTINCT date FROM checkins WHERE user_id = %s ORDER BY date ASC",
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+        connection.close()
+
+        if not rows:
+            return 0, 0
+
+        # Convert dates to a sorted list of date objects
+        dates = []
+        for row in rows:
+            checkin_date = row['date']
+            if isinstance(checkin_date, str):
+                checkin_date = datetime.strptime(checkin_date, '%Y-%m-%d').date()
+            dates.append(checkin_date)
+
+        # Calculate longest streak
+        longest_streak = 1
+        streak = 1
+        for i in range(1, len(dates)):
+            if (dates[i] - dates[i-1]).days == 1:
+                streak += 1
+                if streak > longest_streak:
+                    longest_streak = streak
+            else:
+                streak = 1
+
+        # Calculate current streak (how many days up to today)
+        current_streak = 0
+        current_date = today
+        i = len(dates) - 1
+        while i >= 0 and dates[i] == current_date:
+            current_streak += 1
+            current_date -= timedelta(days=1)
+            i -= 1
+
+        return current_streak, longest_streak
+    except Exception as e:
+        print(f"Error retrieving check-in streak: {e}")
+        return 0, 0
+
+
 @bot.command()
 async def checkin(ctx, *, rating: int):
     """User rates their day on a scale from 1 to 5. Usage: !checkin <rating>
@@ -257,7 +309,16 @@ async def checkin(ctx, *, rating: int):
                     (user_id, today, rating)
                 )
         connection.close()
-        await ctx.send(f"✅ Check-in recorded! You rated your day as {mood_colors[rating]}")
+
+        current_streak, longest_streak = await get_streak(user_id)
+        if current_streak == 0:
+            await ctx.send("Check-in recorded, but no streak yet! Start checking in daily to build your streak! 🔥")
+        else:
+            await ctx.send(
+                f"✅ Check-in recorded! You rated your day as {mood_colors[rating]}\n"
+                f"🔥 Your current check-in streak is {current_streak} day(s)!\n"
+                f"🏆 Your longest streak is {longest_streak} day(s)!"
+                )
     except Exception as e:
         await ctx.send("❌ Failed to record check-in. Please contact the bot admin.")
         print(f"Error recording check-in: {e}")
@@ -292,10 +353,69 @@ async def updatecheckin(ctx, *, rating: int):
                     (rating, user_id, today)
                 )
         connection.close()
-        await ctx.send(f"✅ Check-in updated! You rated your day as {mood_colors[rating]}")
+        await ctx.send(f"✅ Check-in updated! You rated your day as {mood_colors[rating]}\n")
     except Exception as e:
         await ctx.send("❌ Failed to update check-in. Please contact the bot admin.")
         print(f"Error updating check-in: {e}")
+
+from datetime import date, timedelta, datetime
+
+@bot.command()
+async def streak(ctx):
+    """Display user's current and longest check-in streak."""
+    user_id = ctx.author.id
+    today = date.today()
+    try:
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT DISTINCT date FROM checkins WHERE user_id = %s ORDER BY date ASC",
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+        connection.close()
+
+        if not rows:
+            await ctx.send("You haven't made any check-ins yet. Use **!checkin <rating>** to start tracking your days! ☑️")
+            return
+
+        # Convert dates to a sorted list of date objects
+        dates = []
+        for row in rows:
+            checkin_date = row['date']
+            if isinstance(checkin_date, str):
+                checkin_date = datetime.strptime(checkin_date, '%Y-%m-%d').date()
+            dates.append(checkin_date)
+
+        # Calculate longest streak
+        longest_streak = 1
+        streak = 1
+        for i in range(1, len(dates)):
+            if (dates[i] - dates[i-1]).days == 1:
+                streak += 1
+                if streak > longest_streak:
+                    longest_streak = streak
+            else:
+                streak = 1
+
+        # Calculate current streak (how many days up to today)
+        current_streak = 0
+        current_date = today
+        i = len(dates) - 1
+        while i >= 0 and dates[i] == current_date:
+            current_streak += 1
+            current_date -= timedelta(days=1)
+            i -= 1
+
+        await ctx.send(
+            f"🔥 Your current check-in streak is {current_streak} day(s)!\n"
+            f"🏆 Your longest streak is {longest_streak} day(s)!"
+        )
+    except Exception as e:
+        await ctx.send("❌ Failed to retrieve check-in streak. Please contact the bot admin.")
+        print(f"Error retrieving check-in streak: {e}")
+
 
 # Display days ratings
 @bot.command()
