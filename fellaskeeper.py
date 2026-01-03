@@ -8,10 +8,10 @@ from psycopg2.extras import RealDictCursor
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DB_URL = os.getenv("DB_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
-    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def get_user_goals_mapping(user_id):
     """Get user's goals and create a mapping from display number (1, 2, 3...) to database ID.
@@ -162,7 +162,7 @@ async def fellashelp(ctx):
     "\n--- Goals ---\n" +
     "!goal <goal> <number> - Set a new goal\n" +
     "!mygoals - List all your goals\n" +
-    "\n!updategoal <goal_number> <progress_increment> - Update progress on a goal\n" +
+    "!updategoal <goal_number> - Increment goal progress by 1\n" +
     "\tMake sure to check out your goal number with !mygoals first before updating\n" +
     "!delete <goal_number> - Delete a goal by its number\n" + 
     "\n--- Habits ---\n" +
@@ -265,18 +265,10 @@ async def delete(ctx, *, id: int):
         print(f"Error deleting goal: {e}")
 
 @bot.command()
-async def updategoal(ctx, *, id_and_progress):
-    """Update progress on a goal. 
+async def updategoal(ctx, id: int):
+    """Update progress on a goal by incrementing by 1. 
     Make sure to check your goal number with **!mygoals** first.
-    Usage: !updategoal <goal_number> <progress_increment>"""
-    try:
-        id_str, progress_str = id_and_progress.rsplit(" ", 1)
-        id = int(id_str)
-        progress_increment = int(progress_str)
-    except Exception:
-        await ctx.send("❌ Invalid format. Please use **!updategoal <goal_number> <progress_increment>**")
-        return
-    
+    Usage: !updategoal <goal_number>"""
     user_id = ctx.author.id
     try:
         # Get the mapping to translate display number to database ID
@@ -292,10 +284,10 @@ async def updategoal(ctx, *, id_and_progress):
         connection = get_db_connection()
         with connection:
             with connection.cursor() as cursor:
-                # Update the goal's progress
+                # Update the goal's progress by 1
                 cursor.execute(
-                    "UPDATE goals SET progress = LEAST(progress + %s, total) WHERE id = %s AND user_id = %s RETURNING progress, total;",
-                    (progress_increment, db_id, user_id)
+                    "UPDATE goals SET progress = LEAST(progress + 1, total) WHERE id = %s AND user_id = %s RETURNING progress, total;",
+                    (db_id, user_id)
                 )
                 updated = cursor.fetchone()
         connection.close()
