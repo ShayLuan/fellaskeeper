@@ -224,7 +224,8 @@ async def mygoals(ctx):
         
         msg = "**YOUR GOALS:**\n"
         for display_num, row in enumerate(rows, start=1):
-            msg += f"- {display_num} - {row['description'].strip('\"')}: {row['progress']}/{row['total']}\n"
+            progress = row['progress'] if row['progress'] is not None else 0
+            msg += f"- {display_num} - {row['description'].strip('\"')}: {progress}/{row['total']}\n"
         await ctx.send(msg)
     except Exception as e:
         await ctx.send("❌ Failed to retrieve goals. Please contact the bot admin.")
@@ -284,9 +285,9 @@ async def updategoal(ctx, id: int):
         connection = get_db_connection()
         with connection:
             with connection.cursor() as cursor:
-                # Update the goal's progress by 1
+                # Update the goal's progress by 1 (handle NULL as 0)
                 cursor.execute(
-                    "UPDATE goals SET progress = LEAST(progress + 1, total) WHERE id = %s AND user_id = %s RETURNING progress, total;",
+                    "UPDATE goals SET progress = LEAST(COALESCE(progress, 0) + 1, total) WHERE id = %s AND user_id = %s RETURNING progress, total;",
                     (db_id, user_id)
                 )
                 updated = cursor.fetchone()
