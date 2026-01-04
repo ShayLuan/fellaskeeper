@@ -8,10 +8,10 @@ from psycopg2.extras import RealDictCursor
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DB_URL = os.getenv("DB_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
-    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def get_user_goals_mapping(user_id):
     """Get user's goals and create a mapping from display number (1, 2, 3...) to database ID.
@@ -713,14 +713,25 @@ async def get_streak(user_id):
             else:
                 streak = 1
 
-        # Calculate current streak (how many days up to today)
+        # Calculate current streak (how many consecutive days up to today)
+        # Convert dates to a set for O(1) lookup
+        dates_set = set(dates)
+        
+        # Get the most recent check-in date
+        most_recent = dates[-1] if dates else None
+        
+        # Streak is only active if the most recent check-in is today or yesterday
         current_streak = 0
-        current_date = today
-        i = len(dates) - 1
-        while i >= 0 and dates[i] == current_date:
-            current_streak += 1
-            current_date -= timedelta(days=1)
-            i -= 1
+        if most_recent:
+            days_since_last = (today - most_recent).days
+            # Streak is active if last check-in was today or yesterday
+            if days_since_last <= 1:
+                # Start counting backwards from the most recent check-in date
+                current_date = most_recent
+                # Count consecutive days backwards
+                while current_date in dates_set:
+                    current_streak += 1
+                    current_date -= timedelta(days=1)
 
         return current_streak, longest_streak
     except Exception as e:
@@ -890,7 +901,7 @@ async def myyear(ctx):
             rating = row['rating']
             day_to_rating[checkin_date] = rating
         
-        msg = " **Your year so far:** \n"
+        msg = "YOUR YEAR SO FAR\n"
         current_date = start_date
 
         for week in range (27): # 26 rows for weeks + 1 day for 365 days total
