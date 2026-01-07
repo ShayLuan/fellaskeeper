@@ -748,6 +748,7 @@ async def checkin(ctx, *, rating: int):
         return
     
     user_id = ctx.author.id
+    today = date.today()
     try:
         connection = get_db_connection()
         with connection:
